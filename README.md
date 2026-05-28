@@ -1,4 +1,4 @@
-# 🌃 Neon Nights — UK Night Economy Analysis
+# Neon Nights — UK Night Economy Analysis
 
 **Team:** Midnight Explorers  
 **Members:** Saranya Ghosh · Dristi Sengupta · Shruti Singha · Sneha Bhowmick
@@ -139,22 +139,16 @@ raw_footfall.csv
 
 ---
 
-## Team Contributions
-
-| Member | Contributions |
-|---|---|
-| **Saranya Ghosh** | R Studio data pipeline (cleaning and filtering 6 PM–6 AM footfall); presentation design and assembly |
-| **Dristi Sengupta** | Time-series analysis on Hospitality Inflation Index vs. Market GDP; seasonal GDP visualisation |
-| **Shruti Singha** | Variable Correlation Heatmap (footfall, GDP, hospitality jobs); 1.45× GDP Multiplier Effect modelling |
-| **Sneha Bhowmick** | Descriptive statistics, skewness, mean-median gap analysis; project documentation and methodology |
-
----
-
 ## Road Ahead
 
-1. **Predictive Economic Modelling** — Use `lm()` and Random Forest to forecast how the rising Hospitality Inflation Index will impact future footfall and job losses.
-2. **Geospatial Hotspot Analysis** — Map footfall surge events against localised GDP to detect diminishing returns in hyper-dense areas.
-3. **Cost-of-the-Surge Analysis** — Quantify the economic inefficiency of average-based urban planning using distributional analysis of right-skewed footfall data.
+1. **Predictive Economic Modelling**  
+   Extend existing regression (`lm()`) and Random Forest models into forecasting frameworks to analyze how rising Hospitality Inflation Index trends may influence future footfall patterns and potential employment impacts.
+
+2. **Geospatial Hotspot Analysis**  
+   Incorporate GIS-based mapping techniques to identify and visualize high-density footfall zones, and examine the relationship between localized economic activity (GDP) and diminishing returns in hyper-dense urban areas.
+
+3. **Cost-of-the-Surge Analysis**  
+   Build on current distributional insights to quantify the economic inefficiencies of average-based urban planning, using statistical analysis of right-skewed footfall data to capture underlying disparities.
 
 ---
 
