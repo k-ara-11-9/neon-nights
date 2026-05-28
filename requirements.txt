@@ -1,0 +1,7 @@
+# Requirements for generate_raw_data.py
+# Used only to regenerate the synthetic raw dataset from scratch.
+# The dataset itself is hosted on Kaggle:
+# https://www.kaggle.com/datasets/dristi53/night-tourism-uk-footfall-dataset
+
+pandas>=1.5.0
+numpy>=1.23.0

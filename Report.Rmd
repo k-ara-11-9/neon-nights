@@ -1,0 +1,382 @@
+---
+title: "Neon Nights: Footfall Analysis and Surge Prediction in the Urban Night Economy"
+subtitle: "Predictive Modelling and Macro-Economic Impact Report"
+author: "Team Midnight Explorers (Saranya Ghosh, Dristi Sengupta, Shruti Singha, Sneha Bhowmick)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = TRUE,
+  warning   = FALSE,
+  message   = FALSE,
+  fig.align = "center"
+)
+
+# Load reporting and visualisation libraries only
+# Heavy ML libraries (randomForest, rpart, broom) live in 03_advanced_modeling.R
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(knitr)
+library(kableExtra)
+```
+
+---
+
+## Executive Summary
+
+**Research Question:** What is the true macroeconomic value of the Night Economy, and how do external factors — inflation, seasonality, and demand shocks like the COVID-19 pandemic — affect its contribution to local GDP?
+
+The Night Economy (18:00 to 06:00) contributes significantly to local GDP, but crowd volumes are difficult to predict — they shift sharply based on the day, season, weather, and whether a live event is running. This report documents the full analytical pipeline built by Team Midnight Explorers to address that problem.
+
+Working from over 1.1 million hourly sensor records across seven city centre locations, we cleaned the raw data, isolated night economy hours, ran baseline descriptive analysis for 2025, modelled the economic contribution of the sector, and trained a Random Forest to predict surge conditions. The report follows those four stages in order.
+
+---
+
+## 1. The Data Engineering Pipeline
+
+### 1.1 Background and Scope
+
+Real urban sensor feeds are rarely clean. The raw data for this project simulates a realistic API pull with three deliberate problems baked in: sensor battery failures that produce contiguous NA blocks of 12 to 48 hours (roughly 0.1% of records), network double-pings that duplicate approximately 4% of rows, and records delivered in shuffled chronological order. The dataset covers seven pedestrian camera locations across York city centre at hourly resolution from January 2009 to December 2026.
+
+The cleaning script `01_data_cleaning.R` addresses all three issues before filtering down to night economy hours only.
+
+### 1.2 ETL Pipeline Code
+
+```{r etl-pipeline, eval=FALSE}
+# ── Step 1: Ingestion ──────────────────────────────────────────────────────────
+raw_df <- read_csv("raw_footfall.csv", show_col_types = FALSE)
+
+# ── Step 2: Data Typing and Formatting ────────────────────────────────────────
+typed_df <- raw_df %>%
+  mutate(
+    Date = dmy_hms(Date),
+    LocationName = as.factor(LocationName),
+    WeekDay = factor(WeekDay,
+                     levels = c("Monday", "Tuesday", "Wednesday",
+                                "Thursday", "Friday", "Saturday", "Sunday"),
+                     ordered = TRUE),
+    Season      = factor(Season, levels = c("Spring", "Summer", "Autumn", "Winter")),
+    NightPeriod = as.factor(NightPeriod),
+    BRCMonth    = as.factor(BRCMonth)
+  ) %>%
+  select(-Id)
+
+# ── Step 3: Resolving Network and Sensor Errors ───────────────────────────────
+clean_df <- typed_df %>%
+  distinct() %>%
+  arrange(LocationName, Date) %>%
+  filter(!is.na(TotalCount))
+
+# ── Step 4: Scope Filtering (Night Economy only) ──────────────────────────────
+night_economy_df <- clean_df %>%
+  filter(Hour >= 18 | Hour < 6)
+
+# ── Step 5: Export pristine master dataset ────────────────────────────────────
+write_csv(night_economy_df, "FINAL.csv")
+```
+
+### 1.3 Cleaned Dataset Preview
+
+The table below shows the first five rows of the cleaned dataset after ingestion. Timestamps are parsed correctly, categorical columns are typed as factors, and all rows fall within the night economy window.
+
+```{r load-final}
+df <- read_csv("FINAL.csv", show_col_types = FALSE) %>%
+  mutate(
+    LocationName = as.factor(LocationName),
+    WeekDay = factor(WeekDay,
+                     levels = c("Monday", "Tuesday", "Wednesday",
+                                "Thursday", "Friday", "Saturday", "Sunday"),
+                     ordered = TRUE),
+    NightPeriod = factor(NightPeriod,
+                         levels = c("Early Evening", "Peak Night", "Late Night"),
+                         ordered = TRUE),
+    Season               = as.factor(Season),
+    IsWeekend            = as.factor(IsWeekend),
+    live_event_happening = as.factor(live_event_happening),
+    uber_surge_active    = as.factor(uber_surge_active)
+  )
+
+df %>%
+  head(5) %>%
+  kable("html", caption = "Table 1: Cleaned Master Dataset — First Five Records (FINAL.csv)") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    font_size = 12
+  ) %>%
+  scroll_box(width = "100%")
+```
+
+---
+
+## 2. Baseline Analytics and Surge Detection (2025)
+
+To understand what normal looks like before running predictive models, we used 2025 as a baseline year. A Surge Event is defined as any hour where footfall exceeds the 99th percentile of the city-wide distribution for that year.
+
+### 2.1 Location-Level Summary Statistics
+
+The table below shows summary statistics broken down by location. The variance between median and maximum footfall is substantial across all streets. The Surge Events column shows which locations are most frequently pushed to their limits.
+
+```{r summary-stats}
+df_2025 <- df %>% filter(BRCYear == 2025)
+
+surge_threshold <- quantile(df_2025$TotalCount, 0.99, na.rm = TRUE)
+
+stats_summary <- df_2025 %>%
+  group_by(LocationName) %>%
+  summarise(
+    Observations    = n(),
+    Min_Footfall    = min(TotalCount),
+    Median_Footfall = median(TotalCount),
+    Mean_Footfall   = round(mean(TotalCount), 1),
+    Max_Footfall    = max(TotalCount),
+    Std_Deviation   = round(sd(TotalCount), 1),
+    Surge_Events    = sum(TotalCount >= surge_threshold)
+  ) %>%
+  arrange(desc(Median_Footfall))
+
+stats_summary %>%
+  kable("html", caption = paste0(
+    "Table 2: Spatial Summary Statistics by Location (2025) — ",
+    "99th Percentile Surge Threshold: ",
+    round(surge_threshold), " people/hour"
+  )) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#2C3E50") %>%
+  column_spec(8, bold = TRUE, color = "#E74C3C")
+```
+
+### 2.2 Footfall Distribution
+
+The histogram shows the footfall distribution across all night economy hours in 2025. The distribution is right-skewed and approximately log-normal, meaning most hours record relatively moderate footfall but a small number of hours see counts far above the median. Those right-tail hours are the surge events the model is designed to predict.
+
+```{r dist-plot, fig.cap="Figure 1: Distribution of Nightlife Footfall with Kernel Density Estimate (2025)", fig.width=10, fig.height=6}
+ggplot(df_2025, aes(x = TotalCount)) +
+  geom_histogram(aes(y = ..density..),
+                 bins = 50, fill = "#2C3E50", color = "white", alpha = 0.8) +
+  geom_density(color = "#E74C3C", linewidth = 1.2) +
+  geom_vline(xintercept = median(df_2025$TotalCount),
+             color = "#F39C12", linetype = "dashed", linewidth = 1) +
+  annotate("text",
+           x     = median(df_2025$TotalCount) + 150,
+           y     = 0.005,
+           label = paste("Median:", round(median(df_2025$TotalCount))),
+           color = "#F39C12", fontface = "bold") +
+  scale_x_continuous(labels = comma) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title    = "Distribution of Nightlife Footfall (2025)",
+    subtitle = "Log-normal right skew indicating rare, extreme surge events.",
+    x        = "Hourly Footfall Count",
+    y        = "Density"
+  ) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+### 2.3 Spatial Variance and Surge Detection
+
+The violin-boxplot chart shows the full spread of hourly footfall for each location. This makes it easy to compare not just the medians but also the shape of each distribution and where outliers concentrate. Red dots are observations that qualify as surge events.
+
+```{r spatial-plot, fig.cap="Figure 2: Spatial Variance and Surge Detection by Location (2025)", fig.width=10, fig.height=7}
+ggplot(df_2025,
+       aes(x = reorder(LocationName, TotalCount, FUN = median),
+           y = TotalCount, fill = LocationName)) +
+  geom_violin(alpha = 0.3, color = NA) +
+  geom_boxplot(width = 0.2,
+               outlier.color = "#E74C3C",
+               outlier.size  = 1.5,
+               outlier.alpha = 0.6) +
+  coord_flip() +
+  scale_y_continuous(labels = comma) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold")) +
+  labs(
+    title    = "Spatial Variance and Surge Detection by Location (2025)",
+    subtitle = "Red dots represent extreme outlier events exceeding standard physical capacity.",
+    x        = "",
+    y        = "Hourly Footfall"
+  )
+```
+
+### 2.4 The Rhythm of the City
+
+The heatmap plots average footfall by day and hour across the 2025 baseline. The pattern is consistent: footfall builds through Friday and Saturday evenings and drops sharply in the early hours. Midweek nights are considerably quieter, with minor upticks around Bank Holidays and end-of-month weekends.
+
+```{r rhythm-heatmap, fig.cap="Figure 3: Average Hourly Footfall Heatmap by Day and Hour (2025)", fig.width=12, fig.height=5}
+weekly_rhythm <- df_2025 %>%
+  group_by(WeekDay, Hour) %>%
+  summarise(AvgFootfall = mean(TotalCount), .groups = "drop")
+
+ggplot(weekly_rhythm,
+       aes(x = factor(Hour), y = fct_rev(WeekDay), fill = AvgFootfall)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  scale_fill_gradient(low = "#F4F6F6", high = "#8E44AD", name = "Avg\nFootfall") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title  = element_text(face = "bold"),
+    panel.grid  = element_blank()
+  ) +
+  labs(
+    title    = "The Rhythm of the Night Economy (2025 Baseline)",
+    subtitle = "Average hourly footfall tracking the structural buildup and decay of crowds.",
+    x        = "Hour of Night (24-Hour Format)",
+    y        = ""
+  )
+```
+
+### 2.5 Variable Correlation Heatmap
+
+Before moving to economic modelling, it is worth checking how closely the key variables in the dataset actually move together. The heatmap below shows Pearson correlation coefficients across footfall, revenue, GDP contribution, hospitality jobs, inflation, and hour. Values close to 1 indicate a strong positive relationship; values close to -1 indicate an inverse one.
+
+```{r correlation-heatmap, echo=FALSE, out.width="90%", fig.cap="Figure 4: Variable Correlation Heatmap"}
+knitr::include_graphics("plots/07_correlation_heatmap.png")
+```
+
+The two standout results are the correlation between `TotalCount` and `market_gdp_contribution_gbp` (r = 0.95) and between `TotalCount` and `hospitality_jobs_active` (r = 0.96). These figures confirm that footfall is not just a proxy for busyness — it is a direct leading indicator of both economic output and employment in the sector.
+
+---
+
+## 3. Macro-Economic Impact Analysis
+
+Direct venue revenue only captures part of what the night economy generates. A hospitality spend ripples outward — into wages, taxis, food, and secondary retail — so the true GDP contribution is larger than the till takings alone. We used an economic multiplier to estimate that broader figure.
+
+### 3.1 The Economic Multiplier Effect
+
+```{r econ-multiplier, fig.cap="Figure 5: The Night Economy Multiplier Effect", fig.width=10, fig.height=6}
+total_revenue <- sum(df$estimated_revenue_gbp, na.rm = TRUE)
+total_gdp     <- sum(df$market_gdp_contribution_gbp, na.rm = TRUE)
+multiplier    <- total_gdp / total_revenue
+
+econ_df <- data.frame(
+  Metric = c("Direct Venue Revenue", "Total GDP Contribution"),
+  Value  = c(total_revenue, total_gdp)
+)
+
+ggplot(econ_df, aes(x = Metric, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", width = 0.6, color = "white", linewidth = 1) +
+  scale_fill_manual(values = c("Direct Venue Revenue"  = "#E67E22",
+                               "Total GDP Contribution" = "#27AE60")) +
+  scale_y_continuous(labels = label_number(prefix = "£", suffix = " M", scale = 1e-6)) +
+  geom_text(aes(label = paste0("£", round(Value / 1e6, 1), "M")),
+            vjust = -0.5, fontface = "bold", size = 5) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold")) +
+  labs(
+    title    = paste0("The Night Economy Multiplier Effect (Factor: ",
+                      round(multiplier, 2), "x)"),
+    subtitle = "Comparing direct till takings against broader local economic GDP contribution.",
+    x        = "",
+    y        = "Total Economic Value (Millions GBP)"
+  ) +
+  annotate("text", x = 1.5, y = total_gdp * 0.85,
+           label   = paste0("+", round((multiplier - 1) * 100),
+                            "% Indirect Impact\n(Taxis, Food, Wages)"),
+           color   = "#2C3E50", fontface = "italic", size = 5)
+```
+
+### 3.2 Seasonal GDP Contribution
+
+The bar chart below breaks total GDP contribution down by season across the full dataset. Summer is the strongest period, but the gap between seasons is smaller than might be expected — winter still contributes substantially, which challenges the assumption that the night economy is a warm-weather phenomenon.
+
+```{r seasonal-gdp, echo=FALSE, out.width="85%", fig.cap="Figure 6: Total GDP Contribution by Season"}
+knitr::include_graphics("plots/09_seasonal_gdp.png")
+```
+
+### 3.3 Long-term Trends: GDP and Inflation (2009 to 2026)
+
+Two structural forces shape the night economy over the long run: the gradual macro-economic decay of high street footfall and the steady rise in hospitality inflation. The charts below plot both trends. The 2020 collapse is the most visible feature in the GDP series — a direct consequence of pandemic lockdowns — but the post-recovery period also shows that rising inflation from 2021 onwards coincides with a plateau rather than a full rebound in GDP contribution.
+
+```{r longterm-trends, echo=FALSE, out.width="100%", fig.cap="Figure 7: Year-on-Year GDP and Inflation Trends (2009–2026)"}
+knitr::include_graphics("plots/08_longterm_trends.png")
+```
+
+### 3.4 Causal Inference — Linear Regression
+
+To test whether footfall, inflation, and live events are meaningful predictors of GDP contribution, we fitted a linear regression model. The table below shows the coefficients, standard errors, t-statistics, and p-values for each predictor.
+
+```{r regression-table}
+lm_results <- read_csv("outputs/02_linear_regression_gdp_impact.csv",
+                       show_col_types = FALSE)
+
+lm_results %>%
+  kable("html",
+        caption = "Table 3: Linear Regression — Predictors of Local GDP Contribution",
+        col.names = c("Term", "Estimate", "Std. Error", "t-Statistic", "p-Value")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#2980B9")
+```
+
+> **Interpretation:** All three predictors are statistically significant. The positive coefficient on `TotalCount` confirms that higher footfall hours produce measurably higher GDP contribution, independent of inflation and event status.
+
+### 3.5 Model Fit (R-squared)
+
+```{r model-fit}
+lm_fit <- read_csv("outputs/03_linear_regression_model_fit.csv",
+                   show_col_types = FALSE)
+
+lm_fit %>%
+  select(r.squared, adj.r.squared, statistic, p.value, df) %>%
+  kable("html",
+        caption = "Table 4: Linear Regression Model Fit Statistics",
+        col.names = c("R-Squared", "Adjusted R-Squared",
+                      "F-Statistic", "p-Value", "DF")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE) %>%
+  row_spec(0, bold = TRUE, color = "white", background = "#2980B9")
+```
+
+> **Interpretation:** An R-squared value close to 1 confirms that the linear model explains the vast majority of variance in GDP contribution, validating the use of `lm` for causal inference on this dataset.
+
+---
+
+## 4. Predictive Machine Learning
+
+The goal of this section is to predict which hours will become surge events before they happen, using only information available at the start of a night.
+
+### 4.1 Model Summary
+
+A 100-tree Random Forest was trained in `03_advanced_modeling.R` on a 20,000-row sample of the night economy dataset using six input features: location, hour, season, weekend flag, live event flag, and the inflation index. Training was done outside this report to avoid re-running it on every knit; the saved output files are loaded directly below.
+
+### 4.2 Feature Importance
+
+The chart shows which variables the Random Forest found most useful, measured by how much prediction accuracy drops when each variable is randomly permuted. A larger drop means the model was relying on that variable more heavily.
+
+```{r rf-importance, echo=FALSE, out.width="85%", fig.cap="Figure 8: Random Forest Feature Importance (Mean Decrease in MSE)"}
+knitr::include_graphics("plots/05_random_forest_importance.png")
+```
+
+### 4.3 Explainable AI — Decision Tree
+
+Random Forests are difficult to interpret directly because the prediction is an aggregate of 100 trees. To make the logic readable, we extracted a single decision tree from the same data. It shows the exact sequence of conditions the model uses to classify an hour as Normal or Surge.
+
+```{r xai-tree, echo=FALSE, out.width="100%", fig.cap="Figure 9: Explainable AI Decision Tree — Predicting Nightlife Surge Events"}
+knitr::include_graphics("plots/06_xai_decision_tree.png")
+```
+
+> **Reading the tree:** Each node shows the predicted class, the probability split, and the share of training observations that reached it. Green nodes are Normal; red are Surge. The conditions at each branch are the variables the model found most discriminating at that point.
+
+---
+
+## 5. Strategic Recommendations
+
+Three practical recommendations follow from the analysis.
+
+**Shift policing and transport to a predictive model.** The Random Forest shows that surge conditions are largely predictable from location, hour, weekend status, and whether a live event is scheduled. That means police visibility and late-night bus frequency do not need to follow a fixed weekly rota — they can be allocated based on the forecasted risk level for each night. This would improve both resource efficiency and crowd safety.
+
+**Address capacity constraints at narrow locations proactively.** Stonegate in particular hits its physical capacity ceiling repeatedly during payday weekends and public holidays, despite having a below-average median footfall. The data suggests that crowd diversion to Parliament Street during high-probability surge nights would reduce safety risk without requiring additional infrastructure spend.
+
+**Factor the multiplier into licensing and planning decisions.** The roughly 1.45x economic multiplier means that for every pound spent inside a venue, approximately 45 pence more flows into the local economy through wages, transport, and secondary spending. At present, this indirect value is rarely quantified in planning assessments. Including it would give a more accurate picture of what is at stake when night economy venues are assessed for licensing or redevelopment.
+
+---
+
+*Report generated by Team Midnight Explorers. All analysis conducted in R using open-source libraries. Source scripts: `generate_raw_data.py`, `01_data_cleaning.R`, `02_baseline_analysis.R`, `03_advanced_modeling.R`.*

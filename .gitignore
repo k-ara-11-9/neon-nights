@@ -1,0 +1,53 @@
+# ── R ──────────────────────────────────────────────
+# R workspace and history (machine-specific, large)
+.RData
+.RDataTmp
+.RDataTmp1
+.Rhistory
+.Rapp.history
+
+# RStudio project user settings (machine-specific IDE state)
+.Rproj.user/
+
+# R package cache
+packrat/lib*/
+renv/library/
+renv/local/
+renv/staging/
+
+# ── Data & Outputs (not committed — download from Kaggle) ──
+raw_footfall.csv
+FINAL.csv
+*.csv
+
+# Generated plots and output summaries (reproducible from scripts)
+plots/
+outputs/
+
+# ── Python ─────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Reports (rendered artifacts — reproducible from Report.Rmd) ──
+Report.html
+*.pdf
+
+# ── OS & Editor ─────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Misc ────────────────────────────────────────────
+*.log
+*.tmp
